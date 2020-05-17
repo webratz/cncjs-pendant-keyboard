@@ -66,25 +66,43 @@ var store = {
     },
     sender: {
         status: {}
+    },
+    workflow: {
+        state:{}
+    },
+    feeder: {
+        status:{}
+    },
+    command: {
+        running: false
     }
 };
 
 var kbdevent = {
-    l_control: 0,
-    l_shift: 0,
-    l_alt: 0,
-    l_meta: 0,
-    r_control: 0,
-    r_shift: 0,
-    r_alt: 0,
-    r_meta: 0,
-    key: 0, // Normal keys
-    extra: 0, // Advanced Keys or Special Keys
+    down: 0,
+    left: 0,
+    right: 0,
+    up: 0,
+
+    select: 0,
+    start: 0,
+
+    green_y: 0,
+    blue_x: 0,
+    yellow_b: 0,
+    red_a: 0,
+
+    shoulder_left: 0,
+    shoulder_right: 0,
+
+    // maybe unneeded
+    extra: 0,
     repeating: 0, // If it is repating a movement
     can_repeat: 1, // If can repeat
     move: 1, // Actually move size
-    default_move: 1 // Alter by F1, F2, F3
+    default_move: 1 // change with green y or blue x
 };
+
 
 var createServer = function(options) {
     serverMain(options, function(err, socket) {
@@ -117,145 +135,193 @@ var createServer = function(options) {
             store.sender.status = data;
         });
 
+        socket.on("feeder:status", function(data) {
+            store.feeder.status = data;
+        });
+
+        socket.on("workflow:state", function(data) {
+            store.workflow.state = data;
+        });
+
+        socket.on('serialport:read', function(data) {
+            response = (data || '').trim()
+            if (response === 'ok') {
+                store.command.running = false;
+            }
+            else {
+                console.log(response)
+                store.command.running = false;
+
+            }
+        });
+
+        socket.on('serialport:write', function(data) {
+            response = (data || '').trim()
+            store.command.running = true;
+        });
+
         const findPath = interface =>
             hid
                 .devices()
                 .find(
                     item =>
-                        item.vendorId === 26881 &&
-                        item.productId === 9985 &&
-                        item.interface === interface
+                        item.vendorId === 121 &&
+                        item.productId === 294 &&
+                        item.interface === 0
                 ).path;
 
         console.log("Keyboard HID Address:", findPath(0), " & ", findPath(1));
         var keyboard_main = new hid.HID(findPath(0));
         var keyboard_extra = new hid.HID(findPath(1));
 
+        var counter = 0;
+
         keyboard_main.on("data", function(data) {
             var recv = data.toJSON().data;
             var bits = recv.shift();
-            kbdevent.l_control = (bits & 1) !== 0;
-            kbdevent.l_shift = (bits & 2) !== 0;
-            kbdevent.l_alt = (bits & 4) !== 0;
-            kbdevent.l_meta = (bits & 8) !== 0;
-            kbdevent.r_control = (bits & 16) !== 0;
-            kbdevent.r_shift = (bits & 32) !== 0;
-            kbdevent.r_alt = (bits & 64) !== 0;
-            kbdevent.r_meta = (bits & 128) !== 0;
-            recv.shift();
-            kbdevent.key = recv.shift();
+            kbdevent.down = recv[9] !== 0
+            kbdevent.left = recv[7] !== 0
+            kbdevent.right = recv[6] !== 0
+            kbdevent.up = recv[8] !== 0
+
+            kbdevent.green_y = recv[13] !== 0
+            kbdevent.blue_x = recv[10] !== 0
+            kbdevent.yellow_b = recv[12] !== 0
+            kbdevent.red_a = recv[11] !== 0
+
+            kbdevent.shoulder_left = recv[14] !== 0
+            kbdevent.shoulder_right = recv[15] !== 0
+
             kbdevent.repeating = 0;
-            sendToController();
+            // if (counter > 75) {
+            //     sendToController();
+            //     counter = 0;
+            // }
+
+            if (store.command.running === false) {
+                if (counter > 30) {
+                    sendToController();
+                    counter = 0;
+                }
+            }
+            // else {
+            //     console.log('command running. waiting')
+            // }
+            // setTimeout(sendToController, 1500);
+            // console.log('event:', recv);
+            // console.log('mapping', kbdevent)
+            counter +=1;
+            // console.log(counter)
         });
 
         keyboard_extra.on("data", function(data) {
             var recv = data.toJSON().data;
             recv.shift();
             kbdevent.extra = recv.shift();
+
+            kbdevent.select = kbdevent.extra === 1
+            kbdevent.start = kbdevent.extra === 2
+
             kbdevent.repeating = 0;
-            sendToController();
+            // sendToController();
         });
 
         function sendToController() {
             // Calculate move size modifiers
             kbdevent.move = kbdevent.default_move;
-            if (kbdevent.l_alt || kbdevent.r_alt) {
-                kbdevent.move = 0.1;
+            if (kbdevent.green_y) {
+                kbdevent.move = 0.5;
             } else if (
-                kbdevent.l_shift ||
-                kbdevent.r_shift ||
-                kbdevent.r_meta
+                kbdevent.blue_x 
+
             ) {
                 kbdevent.move = 10;
             }
 
-            // Process pressed key
-            switch (kbdevent.extra) {
-                case 234: // vol+
+
+            // only execute some of the commands while the machine is idle
+            if (store['controller']['state']['status']['activeState'] === 'Idle' || store['controller']['state']['status']['activeState'] === 'Jog') {
+                if (kbdevent.up) {
                     socket.emit(
                         "write",
                         options.port,
-                        "G91 Z-" + kbdevent.move + ";\n"
+                        "$J= F500 G91 Y" + kbdevent.move + ";\n",
                     );
-                    break;
-                case 233: // vol-
+                }
+                if (kbdevent.down) {
                     socket.emit(
                         "write",
                         options.port,
-                        "G91 Z" + kbdevent.move + ";\n"
+                        "$J= F500 G91 Y-" + kbdevent.move + ";\n"
                     );
-                    break;
-                case 131: // Media: Play (Top corner left)
-                    socket.emit("write", options.port, "G10 L20 P1 X0;\n");
-                    break;
-                case 138: // E-mail (Top corner left)
-                    socket.emit("write", options.port, "G10 L20 P1 Y0;\n");
-                    break;
-                case 226: // Mute (Top corner left)
-                    socket.emit("write", options.port, "G10 L20 P1 Z0;\n");
-                    break;
-                case 1: // Mouse Left (Top corner left)
+                }
+
+                if (kbdevent.left) {
                     socket.emit(
                         "write",
                         options.port,
-                        "G10 L20 P1 X0 Y0 Z0;\n"
+                        "$J= F500 G91 X-" + kbdevent.move + ";\n"
                     );
-                    break;
-                case 148: // Key: Home -> Goto Zero-working position
-                    socket.emit("write", options.port, "G90 X0 Y0 Z0;\n");
-                    break;
-                default:
-                    break;
+                }
+
+                if (kbdevent.right) {
+                    socket.emit(
+                        "write",
+                        options.port,
+                        "$J= F500 G91 X" + kbdevent.move + ";\n"
+                    );
+                }
+
+                if (kbdevent.shoulder_left) {
+                    socket.emit(
+                        "write",
+                        options.port,
+                        "$J= F250 G91 Z-" + kbdevent.move + ";\n"
+                    );
+                }
+
+                if (kbdevent.shoulder_right) {
+                    socket.emit(
+                        "write",
+                        options.port,
+                        "$J= F250 G91 Z" + kbdevent.move + ";\n"
+                    );
+                }
+
+                // homing
+                if (kbdevent.yellow_b) {
+                    socket.emit(
+                        "write",
+                        options.port,
+                        "$H \n"
+                    );
+                }
+
+                    
+                // zero out work offsets
+                if (kbdevent.select) {
+                    socket.emit(
+                        "write",
+                        options.port,
+                        "G10 L20 P1 Y0 \n G10 L20 P1 X0\n"
+                    );
+                }
             }
-            switch (kbdevent.key) {
-                case 80: // arrow: left
-                    socket.emit(
-                        "write",
-                        options.port,
-                        "G91 X-" + kbdevent.move + ";\n"
-                    );
-                    break;
-                case 79: // arrow: right
-                    socket.emit(
-                        "write",
-                        options.port,
-                        "G91 X" + kbdevent.move + ";\n"
-                    );
-                    break;
-                case 82: // arrow: up
-                    socket.emit(
-                        "write",
-                        options.port,
-                        "G91 Y" + kbdevent.move + ";\n"
-                    );
-                    break;
-                case 81: // arrow: down
-                    socket.emit(
-                        "write",
-                        options.port,
-                        "G91 Y-" + kbdevent.move + ";\n"
-                    );
-                    break;
-                case 58: // key: F1
-                    kbdevent.default_move = 0.1;
-                    break;
-                case 59: // key: F2
-                    kbdevent.default_move = 1;
-                    break;
-                case 60: // key: F3
-                    kbdevent.default_move = 10;
-                    break;
-                case 40: // Key: OK or Enter
-                    kbdevent.can_repeat = kbdevent.can_repeat ? 0 : 1;
-                default:
-                    break;
+            else {
+                console.log('machine not idle or jogging. activeState is', store['controller']['state']['status']['activeState'])
             }
 
-            if (
-                (kbdevent.extra || kbdevent.key) &&
-                kbdevent.can_repeat &&
-                kbdevent.key != 40 && // Key: Enter / OK -- change repeat function
-                kbdevent.extra != 148 // Special Key: Home -- goto Zero-working position
+            if (kbdevent.yellow_b
+                ){
+                socket.emit("homing", options.port);
+            }
+
+            // see https://github.com/cncjs/cncjs-controller/blob/master/src/controller.js#L213
+
+            //     kbdevent.key != 40 && // Key: Enter / OK -- change repeat function
+            //     kbdevent.extra != 148 // Special Key: Home -- goto Zero-working position
+
+            if ((kbdevent.extra || kbdevent.key) && kbdevent.can_repeat
             ) {
                 if (!kbdevent.repeating) {
                     kbdevent.repeating = 1;
@@ -263,11 +329,16 @@ var createServer = function(options) {
                 } else {
                     setTimeout(sendToController, 150);
                 }
-            } else {
+            }
+            else {
                 kbdevent.repeating = 0;
             }
 
-            console.log(kbdevent);
+            //console.log(store['controller']['state']['status']['activeState'])
+            // console.log(store.sender.status)
+            // console.log(store.feeder.status)
+
+
         }
     });
 };

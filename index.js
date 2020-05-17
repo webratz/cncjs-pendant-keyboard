@@ -80,13 +80,22 @@ module.exports = function(options, callback) {
         callback(new Error('Error opening serial port "' + options.port + '"'));
     });
 
-    socket.on('serialport:read', function(data) {
-        console.log((data || '').trim());
-    });
+    // socket.on('serialport:read', function(data) {
+    //     console.log(('serial-read', data || '').trim());
+    // });
 
 
     socket.on('serialport:write', function(data) {
-        console.log((data || '').trim());
+        console.log('serial-write', (data || '').trim());
     });
 
+    // socket.on('connection', (socket2) => {
+    //     socket2.use((packet, next) => {
+    //       // Handler
+    //       console.log('all packets', packet)
+    //       next();
+    //     });
+    //   });
+
 };
+
