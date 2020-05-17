@@ -38,7 +38,7 @@ program.parse(process.argv);
 
 var options = {
   secret: program.secret,
-  port: program.port,
+  port: "/dev/ttyUSB0",
   baudrate: program.baudrate,
   socketAddress: program.socketAddress,
   socketPort: program.socketPort,
@@ -59,6 +59,10 @@ if (options.list) {
   return;
 }
 
+var WORKFLOW_STATE_RUNNING = "running";
+var WORKFLOW_STATE_PAUSED = "paused";
+var WORKFLOW_STATE_IDLE = "idle";
+
 var store = {
   controller: {
     state: {},
@@ -68,7 +72,7 @@ var store = {
     status: {},
   },
   workflow: {
-    state: {},
+    state: { WORKFLOW_STATE_IDLE },
   },
   feeder: {
     status: {},
@@ -126,6 +130,14 @@ var createServer = function (options) {
       store.controller.state = state;
     });
     socket.on("TinyG:settings", function (settings) {
+      store.controller.settings = settings;
+    });
+
+    // controller
+    socket.on("controller:state", function (state) {
+      store.controller.state = state;
+    });
+    socket.on("controller:settings", function (settings) {
       store.controller.settings = settings;
     });
 
@@ -227,6 +239,7 @@ var createServer = function (options) {
       }
 
       // only execute some of the commands while the machine is idle
+    //   console.log(store.worklow.state);
       if (
         store["controller"]["state"]["status"]["activeState"] === "Idle" ||
         store["controller"]["state"]["status"]["activeState"] === "Jog"
@@ -278,17 +291,22 @@ var createServer = function (options) {
           );
         }
 
-        // homing
-        if (kbdevent.yellow_b) {
-          socket.emit("write", options.port, "$H \n");
-        }
-
         // zero out work offsets
         if (kbdevent.select) {
+          socket.emit("write", options.port, "G10 L20 P1 Y0 \n");
+          socket.emit("write", options.port, "G10 L20 P1 X0\n");
+        }
+
+        // run bounding box
+        if (kbdevent.red_a) {
+          console.log(store.controller.state);
+          console.log(store.sender.status);
           socket.emit(
-            "write",
+            "command",
             options.port,
-            "G10 L20 P1 Y0 \n G10 L20 P1 X0\n"
+            "macro:run",
+            "babfbf4b-309f-446b-9dce-520baed272ef",
+            store.sender.status.context
           );
         }
       } else {
@@ -299,7 +317,8 @@ var createServer = function (options) {
       }
 
       if (kbdevent.yellow_b) {
-        socket.emit("homing", options.port);
+        socket.emit("command", options.port, "homing");
+        console.log("homing");
       }
 
       if (store["controller"]["state"]["status"]["activeState"] === "Run") {
